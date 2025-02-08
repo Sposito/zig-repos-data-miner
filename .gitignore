@@ -4,3 +4,4 @@ __pycache__/
 repo_graphs.db
 tests/__init__.py
 tests/__pycache__/
+.venv/

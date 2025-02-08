@@ -25,6 +25,10 @@ class NodeType(enum.Enum):
 
 # --- SQLite Setup ---
 def init_db():
+    """
+    Initializes the SQLite database by creating required tables if they do not exist.
+    """
+
     conn = sqlite3.connect(db_path)
     c = conn.cursor()
     c.execute("""
@@ -50,6 +54,11 @@ def init_db():
 
 
 def save_graph_to_db():
+    """
+    Saves the current state of the repository graph to the SQLite database.
+    Nodes and edges are inserted if they do not already exist.
+    """
+
     conn = sqlite3.connect(db_path)
     c = conn.cursor()
 
@@ -88,6 +97,11 @@ def save_graph_to_db():
 
 
 def load_graph_from_db():
+    """
+    Loads the repository graph from the SQLite database into memory.
+    Nodes and edges are reconstructed in the NetworkX graph.
+    """
+
     conn = sqlite3.connect(db_path)
     c = conn.cursor()
 
@@ -106,29 +120,70 @@ def load_graph_from_db():
 
 # --- Graph Construction Helpers ---
 def add_commit(commit_hash: str, timestamp: str, author: str, message: str, graph=None):
+    """
+    Adds a commit node to the repository graph.
+
+    Parameters:
+    - commit_hash: Unique identifier for the commit.
+    - timestamp: Unix timestamp of the commit.
+    - author: Author of the commit.
+    - message: Commit message.
+    - graph: Optional graph instance; defaults to the global repo_graph.
+    """
     if graph is None:
         graph = repo_graph
     graph.add_node(commit_hash, node_type=NodeType.COMMIT.value, timestamp=timestamp, author=author, message=message)
 
 
 def add_file(file_path: str, commit_hash: str, prev_commit: str = None):
+    """
+    Adds a file node to the repository graph and links it to a commit that modifies it.
+
+    Parameters:
+    - file_path: Path to the file.
+    - commit_hash: Commit that modified the file.
+    - prev_commit: Optional previous commit for tracking file history.
+    """
+
     if file_path not in repo_graph:
         repo_graph.add_node(file_path, node_type=NodeType.FILE.value)
     repo_graph.add_edge(commit_hash, file_path, relation="modifies")
 
 
 def add_folder(folder_path: str):
+    """
+    Adds a folder node to the repository graph.
+
+    Parameters:
+    - folder_path: Path to the folder.
+    """
+
     if folder_path not in repo_graph:
         repo_graph.add_node(folder_path, node_type=NodeType.FOLDER.value)
 
 
 def add_file_to_folder(file_path: str):
+    """
+    Links a file to its containing folder in the graph.
+
+    Assumptions:
+    - File paths use POSIX-style separators
+    - Parent folder hierarchy already exists or will be created
+    """
     folder_path = os.path.dirname(file_path)
     add_folder(folder_path)
     repo_graph.add_edge(folder_path, file_path, relation="contains")
 
 
 def add_reference(src_file: str, dest_file: str):
+    """
+    Adds a reference edge between two files, indicating that one references the other.
+
+    Parameters:
+    - src_file: The file that contains the reference.
+    - dest_file: The file being referenced.
+    """
+
     if src_file not in repo_graph:
         repo_graph.add_node(src_file, node_type=NodeType.FILE.value)
     if dest_file not in repo_graph:
@@ -137,6 +192,14 @@ def add_reference(src_file: str, dest_file: str):
 
 
 def add_repository(repo_id: str, graph=None):
+    """
+    Adds a repository node to the graph.
+
+    Parameters:
+    - repo_id: Unique identifier for the repository.
+    - graph: Optional graph instance; defaults to the global repo_graph.
+    """
+
     if graph is None:
         graph = repo_graph
     graph.add_node(repo_id, node_type=NodeType.REPOSITORY.value)
@@ -144,6 +207,10 @@ def add_repository(repo_id: str, graph=None):
 
 # --- Repository Processing ---
 def process_repositories():
+    """
+    Iterates over all repositories in the configured directory and processes them.
+    """
+
     for repo_name in os.listdir(repos_path):
         repo_dir = os.path.join(repos_path, repo_name)
         if os.path.isdir(repo_dir) and os.path.exists(os.path.join(repo_dir, ".git")):
@@ -151,6 +218,14 @@ def process_repositories():
 
 
 def process_repository(repo_path: str, graph=None):
+    """
+    Processes a single repository by extracting commits, analyzing files, and constructing the graph.
+
+    Parameters:
+    - repo_path: Path to the repository.
+    - graph: Optional graph instance; defaults to the global repo_graph.
+    """
+
     if graph is None:
         graph = repo_graph
 
@@ -198,7 +273,6 @@ def process_repository(repo_path: str, graph=None):
     # Integrate file scanning: process repository files after processing commits.
     process_repository_files(repo_path, graph)
 
-
     git_log_cmd = ["git", "-C", repo_path, "log", "--pretty=format:%H|%at|%an|%s", "--reverse"]
     try:
         result = subprocess.run(git_log_cmd, capture_output=True, text=True, check=True)
@@ -215,6 +289,18 @@ def process_repository(repo_path: str, graph=None):
 
 
 def analyze_zig_file(file_path: str, graph=repo_graph):
+    """
+    Analyzes Zig source files for module dependencies via @import statements.
+
+    Assumptions:
+    - Only processes .zig files
+    - Uses simple regex pattern matching (not full AST parsing)
+    - Imports are assumed to be file-relative paths
+    - Files are UTF-8 encoded
+
+    Security Note:
+    - File I/O operations should be sandboxed in production
+    """
     try:
         with open(file_path, 'r', encoding='utf-8') as f:
             content = f.read()
@@ -228,6 +314,18 @@ def analyze_zig_file(file_path: str, graph=repo_graph):
 
 
 def process_repository_files(repo_path: str, graph):
+    """
+    Processes all files and folders in a repository, building structural relationships.
+
+    Features:
+    - Creates folder nodes for each directory
+    - Creates file nodes and 'contains' relationships
+    - Analyzes Zig files for cross-module references
+
+    Limitations:
+    - Only processes .zig files for code analysis
+    - Maximum directory depth is system/file handle limit
+    """
     for root, dirs, files in os.walk(repo_path):
         add_folder(root)
         for directory in dirs:
@@ -241,6 +339,14 @@ def process_repository_files(repo_path: str, graph):
 
 
 def walk_repos(path: str, graph, signature: str, action: Callable[[str, any], None]):
+    """
+    Walks through repositories and executes processing action
+
+    Assumptions:
+    - Repositories are direct children of the root path
+    - Signature file (typically .git) indicates valid repos
+    - Action function handles its own error checking
+    """
     for repo_name in os.listdir(path):
         repo_dir = os.path.join(path, repo_name)
         if os.path.isdir(repo_dir) and os.path.exists(os.path.join(repo_dir, signature)):
@@ -249,6 +355,13 @@ def walk_repos(path: str, graph, signature: str, action: Callable[[str, any], No
 
 # --- Repository Cleaning ---
 def clean_repository(repo_path: str):
+    """
+    Resets and cleans a Git repository, discarding uncommitted changes.
+
+    Parameters:
+    - repo_path: Path to the repository to clean.
+    """
+
     try:
         subprocess.run(["git", "-C", repo_path, "reset", "--hard"], capture_output=True, text=True, check=True)
         subprocess.run(["git", "-C", repo_path, "clean", "-fdx"], capture_output=True, text=True, check=True)
@@ -258,6 +371,14 @@ def clean_repository(repo_path: str):
 
 
 def clean_all_repositories(path: str, signature: str = ".git"):
+    """
+    Cleans all repositories in the specified directory by resetting and removing untracked files.
+
+    Parameters:
+    - path: Root directory containing repositories.
+    - signature: File or folder indicating a valid repository (default is ".git").
+    """
+
     for repo_name in os.listdir(path):
         repo_dir = os.path.join(path, repo_name)
         if os.path.isdir(repo_dir) and os.path.exists(os.path.join(repo_dir, signature)):
@@ -267,6 +388,16 @@ def clean_all_repositories(path: str, signature: str = ".git"):
 # --- API Endpoint ---
 @app.get("/repos/{repo_id}/commits")
 def get_commits_for_repo(repo_id: str):
+    """
+    Retrieves commit history for a specific repository from the database.
+
+    Parameters:
+    - repo_id: Unique identifier of the repository.
+
+    Returns:
+    - A list of commits containing commit hash, timestamp, author, and message.
+    """
+
     conn = sqlite3.connect(db_path)
     c = conn.cursor()
     query = """
