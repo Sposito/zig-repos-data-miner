@@ -7,7 +7,7 @@ import re
 import enum
 import uvicorn
 import sqlite3
-from typing import List, Dict
+from typing import List, Dict, Callable
 
 app = FastAPI()
 repo_graph = nx.DiGraph()
@@ -20,7 +20,7 @@ class NodeType(enum.Enum):
     COMMIT = "commit"
     FILE = "file"
     FOLDER = "folder"
-    REPOSITORY = "repository"  # New NodeType for repositories
+    REPOSITORY = "repository"
 
 
 # --- SQLite Setup ---
@@ -46,14 +46,13 @@ def init_db():
     """)
     conn.commit()
     conn.close()
-    print("Database initialized successfully.")  # Debug log
+    print("Database initialized successfully.")
 
 
 def save_graph_to_db():
     conn = sqlite3.connect(db_path)
     c = conn.cursor()
 
-    # Store nodes using dictionary format
     node_data: List[Dict[str, str]] = [
         {
             "id": n,
@@ -64,14 +63,12 @@ def save_graph_to_db():
         }
         for n in repo_graph.nodes
     ]
-
     if node_data:
         c.executemany("""
-            INSERT OR IGNORE INTO nodes (id, type, timestamp, author, message) 
+            INSERT OR IGNORE INTO nodes (id, type, timestamp, author, message)
             VALUES (:id, :type, :timestamp, :author, :message)
         """, node_data)
 
-    # Store edges using dictionary format
     edge_data: List[Dict[str, str]] = [
         {
             "src": u,
@@ -80,10 +77,9 @@ def save_graph_to_db():
         }
         for u, v in repo_graph.edges
     ]
-
     if edge_data:
         c.executemany("""
-            INSERT OR IGNORE INTO edges (src, dest, relation) 
+            INSERT OR IGNORE INTO edges (src, dest, relation)
             VALUES (:src, :dest, :relation)
         """, edge_data)
 
@@ -111,15 +107,13 @@ def load_graph_from_db():
 # --- Graph Construction Helpers ---
 def add_commit(commit_hash: str, timestamp: str, author: str, message: str, graph=None):
     if graph is None:
-        graph = repo_graph  # Use the global graph if none is provided
+        graph = repo_graph
     graph.add_node(commit_hash, node_type=NodeType.COMMIT.value, timestamp=timestamp, author=author, message=message)
 
 
 def add_file(file_path: str, commit_hash: str, prev_commit: str = None):
-    global repo_graph
     if file_path not in repo_graph:
         repo_graph.add_node(file_path, node_type=NodeType.FILE.value)
-    # Fixed the typo here: removed the erroneous 'cd -'
     repo_graph.add_edge(commit_hash, file_path, relation="modifies")
 
 
@@ -135,7 +129,6 @@ def add_file_to_folder(file_path: str):
 
 
 def add_reference(src_file: str, dest_file: str):
-    global repo_graph
     if src_file not in repo_graph:
         repo_graph.add_node(src_file, node_type=NodeType.FILE.value)
     if dest_file not in repo_graph:
@@ -144,15 +137,12 @@ def add_reference(src_file: str, dest_file: str):
 
 
 def add_repository(repo_id: str, graph=None):
-    """
-    Adds a repository node to the graph with the given repo_id.
-    """
     if graph is None:
         graph = repo_graph
     graph.add_node(repo_id, node_type=NodeType.REPOSITORY.value)
 
 
-# --- Process Repositories ---
+# --- Repository Processing ---
 def process_repositories():
     for repo_name in os.listdir(repos_path):
         repo_dir = os.path.join(repos_path, repo_name)
@@ -161,11 +151,9 @@ def process_repositories():
 
 
 def process_repository(repo_path: str, graph=None):
-    global repo_graph
     if graph is None:
         graph = repo_graph
 
-    # Determine repository ID by retrieving and parsing the remote URL.
     try:
         remote_result = subprocess.run(
             ["git", "-C", repo_path, "remote", "get-url", "origin"],
@@ -173,33 +161,24 @@ def process_repository(repo_path: str, graph=None):
         )
         remote_url = remote_result.stdout.strip()
         repo_id = None
-
         if remote_url.startswith("git@"):
-            # SSH format, e.g.:
-            # "git@github.com:getty-zig/getty.git"
             path_part = remote_url.split(":", 1)[1]
             if path_part.endswith(".git"):
                 path_part = path_part[:-4]
             parts = path_part.split("/")
         elif remote_url.startswith("https://"):
-            # HTTPS format, e.g.:
-            # "https://github.com/getty-zig/getty.git" or "https://github.com/getty-zig/getty"
             parts = remote_url.split("/")
             if parts[-1].endswith(".git"):
                 parts[-1] = parts[-1][:-4]
         else:
             parts = []
-
         if len(parts) >= 2:
-            # Assuming the last two parts are the username and repository name.
             repo_id = f"{parts[-2]}/{parts[-1]}"
         else:
             repo_id = os.path.basename(os.path.normpath(repo_path))
-    except Exception as e:
-        # If any error occurs (e.g., remote URL not available), fallback to the folder name.
+    except Exception:
         repo_id = os.path.basename(os.path.normpath(repo_path))
 
-    # Add a repository node to the graph with the composite repository ID.
     add_repository(repo_id, graph=graph)
 
     git_log_cmd = ["git", "-C", repo_path, "log", "--pretty=format:%H|%at|%an|%s", "--reverse"]
@@ -213,33 +192,61 @@ def process_repository(repo_path: str, graph=None):
         commit_data = line.split("|")
         if len(commit_data) == 4:
             commit_hash, timestamp, author, message = commit_data
-
-            # Add commit node
             add_commit(commit_hash, timestamp, author, message, graph=graph)
-            # Add an edge from the repository node to the commit node
             graph.add_edge(repo_id, commit_hash, relation="has_commit")
-
-
 
 
 def analyze_zig_file(file_path: str, graph=repo_graph):
     try:
         with open(file_path, 'r', encoding='utf-8') as f:
             content = f.read()
-
-            # Extract imports
             imports = set(re.findall(r'@import\s*\(\s*"(.*?)"\s*\)', content))
-
             for imp in imports:
                 graph.add_node(file_path, node_type=NodeType.FILE.value)
                 graph.add_node(imp, node_type=NodeType.FILE.value)
                 graph.add_edge(file_path, imp, relation="references")
-
     except Exception as e:
         logging.warning(f"Failed to analyze {file_path}: {e}")
 
 
-# --- API Endpoints ---
+def process_repository_files(repo_path: str, graph):
+    for root, dirs, files in os.walk(repo_path):
+        add_folder(root)
+        for directory in dirs:
+            folder_path = os.path.join(root, directory)
+            add_folder(folder_path)
+        for file in files:
+            file_path = os.path.join(root, file)
+            add_file_to_folder(file_path)
+            if file.endswith('.zig'):
+                analyze_zig_file(file_path, graph)
+
+
+def walk_repos(path: str, graph, signature: str, action: Callable[[str, any], None]):
+    for repo_name in os.listdir(path):
+        repo_dir = os.path.join(path, repo_name)
+        if os.path.isdir(repo_dir) and os.path.exists(os.path.join(repo_dir, signature)):
+            action(repo_dir, graph)
+
+
+# --- Repository Cleaning ---
+def clean_repository(repo_path: str):
+    try:
+        subprocess.run(["git", "-C", repo_path, "reset", "--hard"], capture_output=True, text=True, check=True)
+        subprocess.run(["git", "-C", repo_path, "clean", "-fdx"], capture_output=True, text=True, check=True)
+        print(f"Cleaned repository: {repo_path}")
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Error cleaning repository {repo_path}: {e}")
+
+
+def clean_all_repositories(path: str, signature: str = ".git"):
+    for repo_name in os.listdir(path):
+        repo_dir = os.path.join(path, repo_name)
+        if os.path.isdir(repo_dir) and os.path.exists(os.path.join(repo_dir, signature)):
+            clean_repository(repo_dir)
+
+
+# --- API Endpoint ---
 @app.get("/repos/{repo_id}/commits")
 def get_commits_for_repo(repo_id: str):
     conn = sqlite3.connect(db_path)
@@ -264,10 +271,19 @@ def get_commits_for_repo(repo_id: str):
     return commits
 
 
-# --- Run API Server ---
+# --- Main Execution ---
 if __name__ == "__main__":
     init_db()
     load_graph_from_db()
+
+    # Clean all repositories so they return to a clean state.
+    clean_all_repositories(repos_path)
+
+    # Process repositories for commit history.
     process_repositories()
+
+    # Process each repository's files and folders.
+    walk_repos(repos_path, repo_graph, ".git", process_repository_files)
+
     save_graph_to_db()
     uvicorn.run(app, host="0.0.0.0", port=8000)
