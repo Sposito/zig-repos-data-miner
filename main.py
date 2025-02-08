@@ -1,16 +1,16 @@
+import logging
+
 from fastapi import FastAPI
 import networkx as nx
 import os
 import subprocess
 import re
 import enum
-import sqlite3
 import uvicorn
 
-# Initialize API and Graph
 app = FastAPI()
 repo_graph = nx.DiGraph()
-repos_path = "./repos"
+repos_path = os.path.expanduser("~/Projects/ProjectsArchive/zig-trainer")
 db_path = "./repo_graphs.db"
 
 
@@ -29,7 +29,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS nodes (
             id TEXT PRIMARY KEY,
             type TEXT,
-            timestamp INTEGER,
+            timestamp TEXT,
             author TEXT,
             message TEXT
         )
@@ -44,26 +44,50 @@ def init_db():
     """)
     conn.commit()
     conn.close()
+    print("Database initialized successfully.")  # Debug log
+
+
+import sqlite3
+from typing import List, Dict
 
 
 def save_graph_to_db():
     conn = sqlite3.connect(db_path)
     c = conn.cursor()
 
-    # Store nodes
-    c.executemany("""
-        INSERT OR IGNORE INTO nodes (id, type, timestamp, author, message) 
-        VALUES (?, ?, ?, ?, ?)
-    """, [(n, repo_graph.nodes[n].get("node_type"),
-           repo_graph.nodes[n].get("timestamp"),
-           repo_graph.nodes[n].get("author"),
-           repo_graph.nodes[n].get("message")) for n in repo_graph.nodes])
+    # Store nodes using dictionary format
+    node_data: List[Dict[str, str]] = [
+        {
+            "id": n,
+            "type": str(repo_graph.nodes[n].get("node_type", "")),
+            "timestamp": str(repo_graph.nodes[n].get("timestamp", "")),
+            "author": str(repo_graph.nodes[n].get("author", "")),
+            "message": str(repo_graph.nodes[n].get("message", ""))
+        }
+        for n in repo_graph.nodes
+    ]
 
-    # Store edges
-    c.executemany("""
-        INSERT OR IGNORE INTO edges (src, dest, relation) 
-        VALUES (?, ?, ?)
-    """, [(u, v, repo_graph[u][v]["relation"]) for u, v in repo_graph.edges])
+    if node_data:
+        c.executemany("""
+            INSERT OR IGNORE INTO nodes (id, type, timestamp, author, message) 
+            VALUES (:id, :type, :timestamp, :author, :message)
+        """, node_data)
+
+    # Store edges using dictionary format
+    edge_data: List[Dict[str, str]] = [
+        {
+            "src": u,
+            "dest": v,
+            "relation": str(repo_graph[u][v].get("relation", ""))
+        }
+        for u, v in repo_graph.edges
+    ]
+
+    if edge_data:
+        c.executemany("""
+            INSERT OR IGNORE INTO edges (src, dest, relation) 
+            VALUES (:src, :dest, :relation)
+        """, edge_data)
 
     conn.commit()
     conn.close()
@@ -87,7 +111,7 @@ def load_graph_from_db():
 
 
 # --- Graph Construction Helpers ---
-def add_commit(commit_hash: str, timestamp: int, author: str, message: str, graph=None):
+def add_commit(commit_hash: str, timestamp: str, author: str, message: str, graph=None):
     if graph is None:
         graph = repo_graph  # Use the global graph if none is provided
     graph.add_node(commit_hash, node_type=NodeType.COMMIT.value, timestamp=timestamp, author=author, message=message)
@@ -97,7 +121,7 @@ def add_file(file_path: str, commit_hash: str, prev_commit: str = None):
     global repo_graph
     if file_path not in repo_graph:
         repo_graph.add_node(file_path, node_type=NodeType.FILE.value)
-    repo_graph.add_edge(commit_hash, file_path, relation="modifies")
+    repo_graph.add_edge(commit_hash,cd - file_path, relation="modifies")
 
 
 def add_folder(folder_path: str):
@@ -144,7 +168,8 @@ def process_repository(repo_path: str, graph=None):
         commit_data = line.split("|")
         if len(commit_data) == 4:
             commit_hash, timestamp, author, message = commit_data
-            add_commit(commit_hash, (int)timestamp, author, message, graph=graph)
+
+            add_commit(commit_hash, timestamp, author, message, graph=graph)
 
 
 def analyze_zig_file(file_path: str, graph=repo_graph):
@@ -160,8 +185,8 @@ def analyze_zig_file(file_path: str, graph=repo_graph):
                 graph.add_node(imp, node_type=NodeType.FILE.value)
                 graph.add_edge(file_path, imp, relation="references")
 
-    except Exception:
-        pass
+    except Exception as e:
+        logging.warning(f"Failed to analyze {file_path}: {e}")
 
 
 # --- API Endpoints ---
