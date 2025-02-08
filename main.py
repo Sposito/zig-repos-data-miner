@@ -195,6 +195,24 @@ def process_repository(repo_path: str, graph=None):
             add_commit(commit_hash, timestamp, author, message, graph=graph)
             graph.add_edge(repo_id, commit_hash, relation="has_commit")
 
+    # Integrate file scanning: process repository files after processing commits.
+    process_repository_files(repo_path, graph)
+
+
+    git_log_cmd = ["git", "-C", repo_path, "log", "--pretty=format:%H|%at|%an|%s", "--reverse"]
+    try:
+        result = subprocess.run(git_log_cmd, capture_output=True, text=True, check=True)
+        git_log_output = result.stdout.splitlines()
+    except subprocess.CalledProcessError:
+        git_log_output = []
+
+    for line in git_log_output:
+        commit_data = line.split("|")
+        if len(commit_data) == 4:
+            commit_hash, timestamp, author, message = commit_data
+            add_commit(commit_hash, timestamp, author, message, graph=graph)
+            graph.add_edge(repo_id, commit_hash, relation="has_commit")
+
 
 def analyze_zig_file(file_path: str, graph=repo_graph):
     try:
