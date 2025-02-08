@@ -1,5 +1,4 @@
 import logging
-
 from fastapi import FastAPI
 import networkx as nx
 import os
@@ -7,6 +6,8 @@ import subprocess
 import re
 import enum
 import uvicorn
+import sqlite3
+from typing import List, Dict
 
 app = FastAPI()
 repo_graph = nx.DiGraph()
@@ -19,6 +20,7 @@ class NodeType(enum.Enum):
     COMMIT = "commit"
     FILE = "file"
     FOLDER = "folder"
+    REPOSITORY = "repository"  # New NodeType for repositories
 
 
 # --- SQLite Setup ---
@@ -45,10 +47,6 @@ def init_db():
     conn.commit()
     conn.close()
     print("Database initialized successfully.")  # Debug log
-
-
-import sqlite3
-from typing import List, Dict
 
 
 def save_graph_to_db():
@@ -121,7 +119,8 @@ def add_file(file_path: str, commit_hash: str, prev_commit: str = None):
     global repo_graph
     if file_path not in repo_graph:
         repo_graph.add_node(file_path, node_type=NodeType.FILE.value)
-    repo_graph.add_edge(commit_hash,cd - file_path, relation="modifies")
+    # Fixed the typo here: removed the erroneous 'cd -'
+    repo_graph.add_edge(commit_hash, file_path, relation="modifies")
 
 
 def add_folder(folder_path: str):
@@ -144,6 +143,15 @@ def add_reference(src_file: str, dest_file: str):
     repo_graph.add_edge(src_file, dest_file, relation="references")
 
 
+def add_repository(repo_id: str, graph=None):
+    """
+    Adds a repository node to the graph with the given repo_id.
+    """
+    if graph is None:
+        graph = repo_graph
+    graph.add_node(repo_id, node_type=NodeType.REPOSITORY.value)
+
+
 # --- Process Repositories ---
 def process_repositories():
     for repo_name in os.listdir(repos_path):
@@ -155,7 +163,44 @@ def process_repositories():
 def process_repository(repo_path: str, graph=None):
     global repo_graph
     if graph is None:
-        graph = repo_graph  # Use the global graph unless another is provided
+        graph = repo_graph
+
+    # Determine repository ID by retrieving and parsing the remote URL.
+    try:
+        remote_result = subprocess.run(
+            ["git", "-C", repo_path, "remote", "get-url", "origin"],
+            capture_output=True, text=True, check=True
+        )
+        remote_url = remote_result.stdout.strip()
+        repo_id = None
+
+        if remote_url.startswith("git@"):
+            # SSH format, e.g.:
+            # "git@github.com:getty-zig/getty.git"
+            path_part = remote_url.split(":", 1)[1]
+            if path_part.endswith(".git"):
+                path_part = path_part[:-4]
+            parts = path_part.split("/")
+        elif remote_url.startswith("https://"):
+            # HTTPS format, e.g.:
+            # "https://github.com/getty-zig/getty.git" or "https://github.com/getty-zig/getty"
+            parts = remote_url.split("/")
+            if parts[-1].endswith(".git"):
+                parts[-1] = parts[-1][:-4]
+        else:
+            parts = []
+
+        if len(parts) >= 2:
+            # Assuming the last two parts are the username and repository name.
+            repo_id = f"{parts[-2]}/{parts[-1]}"
+        else:
+            repo_id = os.path.basename(os.path.normpath(repo_path))
+    except Exception as e:
+        # If any error occurs (e.g., remote URL not available), fallback to the folder name.
+        repo_id = os.path.basename(os.path.normpath(repo_path))
+
+    # Add a repository node to the graph with the composite repository ID.
+    add_repository(repo_id, graph=graph)
 
     git_log_cmd = ["git", "-C", repo_path, "log", "--pretty=format:%H|%at|%an|%s", "--reverse"]
     try:
@@ -169,7 +214,12 @@ def process_repository(repo_path: str, graph=None):
         if len(commit_data) == 4:
             commit_hash, timestamp, author, message = commit_data
 
+            # Add commit node
             add_commit(commit_hash, timestamp, author, message, graph=graph)
+            # Add an edge from the repository node to the commit node
+            graph.add_edge(repo_id, commit_hash, relation="has_commit")
+
+
 
 
 def analyze_zig_file(file_path: str, graph=repo_graph):
@@ -190,12 +240,26 @@ def analyze_zig_file(file_path: str, graph=repo_graph):
 
 
 # --- API Endpoints ---
-@app.get("/commits")
-def get_commits():
+@app.get("/repos/{repo_id}/commits")
+def get_commits_for_repo(repo_id: str):
     conn = sqlite3.connect(db_path)
     c = conn.cursor()
-    c.execute("SELECT id, timestamp, author, message FROM nodes WHERE type = ?", (NodeType.COMMIT.value,))
-    commits = [{"commit": row[0][:7], "timestamp": row[1], "author": row[2], "message": row[3]} for row in c.fetchall()]
+    query = """
+    SELECT n.id, n.timestamp, n.author, n.message
+    FROM nodes n
+    JOIN edges e ON n.id = e.dest
+    WHERE e.src = ? AND e.relation = 'has_commit' AND n.type = ?
+    """
+    c.execute(query, (repo_id, NodeType.COMMIT.value))
+    commits = [
+        {
+            "commit": row[0][:7],
+            "timestamp": row[1],
+            "author": row[2],
+            "message": row[3]
+        }
+        for row in c.fetchall()
+    ]
     conn.close()
     return commits
 
