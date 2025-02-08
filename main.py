@@ -90,16 +90,15 @@ def load_graph_from_db():
 def add_commit(commit_hash: str, timestamp: str, author: str, message: str, graph=None):
     if graph is None:
         graph = repo_graph  # Use the global graph if none is provided
-
-    print(f"Adding commit: {commit_hash}")  # Debugging output
     graph.add_node(commit_hash, node_type=NodeType.COMMIT.value, timestamp=timestamp, author=author, message=message)
+
 
 def add_file(file_path: str, commit_hash: str, prev_commit: str = None):
     global repo_graph
-    print(f"Adding file: {file_path} for commit: {commit_hash}")  # Debugging output
     if file_path not in repo_graph:
         repo_graph.add_node(file_path, node_type=NodeType.FILE.value)
     repo_graph.add_edge(commit_hash, file_path, relation="modifies")
+
 
 def add_folder(folder_path: str):
     if folder_path not in repo_graph:
@@ -114,7 +113,6 @@ def add_file_to_folder(file_path: str):
 
 def add_reference(src_file: str, dest_file: str):
     global repo_graph
-    print(f"Adding reference from {src_file} -> {dest_file}")  # Debugging output
     if src_file not in repo_graph:
         repo_graph.add_node(src_file, node_type=NodeType.FILE.value)
     if dest_file not in repo_graph:
@@ -135,8 +133,6 @@ def process_repository(repo_path: str, graph=None):
     if graph is None:
         graph = repo_graph  # Use the global graph unless another is provided
 
-    print(f"Processing repository: {repo_path}")
-
     git_log_cmd = ["git", "-C", repo_path, "log", "--pretty=format:%H|%at|%an|%s", "--reverse"]
     try:
         result = subprocess.run(git_log_cmd, capture_output=True, text=True, check=True)
@@ -145,15 +141,10 @@ def process_repository(repo_path: str, graph=None):
         git_log_output = []
 
     for line in git_log_output:
-        print(f"Processing commit line: {line}")  # Debugging output
         commit_data = line.split("|")
         if len(commit_data) == 4:
             commit_hash, timestamp, author, message = commit_data
             add_commit(commit_hash, timestamp, author, message, graph=graph)
-        else:
-            print(f"Malformed commit line: {line}")  # Debugging
-
-    print(f"Graph nodes after processing: {graph.nodes()}")  # Debugging output
 
 
 def analyze_zig_file(file_path: str, graph=repo_graph):
@@ -163,16 +154,14 @@ def analyze_zig_file(file_path: str, graph=repo_graph):
 
             # Extract imports
             imports = set(re.findall(r'@import\s*\(\s*"(.*?)"\s*\)', content))
-            print(f"Imports found in {file_path}: {imports}")  # Debugging output
 
             for imp in imports:
                 graph.add_node(file_path, node_type=NodeType.FILE.value)
                 graph.add_node(imp, node_type=NodeType.FILE.value)
                 graph.add_edge(file_path, imp, relation="references")
 
-    except Exception as e:
-        print(f"Error processing {file_path}: {e}")
-
+    except Exception:
+        pass
 
 
 # --- API Endpoints ---

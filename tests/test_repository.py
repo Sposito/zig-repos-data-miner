@@ -4,10 +4,12 @@ import subprocess  # Add this at the top of tests/test_repository.py
 from unittest.mock import patch, MagicMock, mock_open
 from main import process_repository, analyze_zig_file, repo_graph
 
+
 @pytest.fixture(autouse=True)
 def reset_repo_graph():
     global repo_graph
     repo_graph = nx.DiGraph()
+
 
 @patch("subprocess.run")
 @patch("builtins.open", new_callable=mock_open, read_data="const std = @import(\"std\");")
@@ -41,4 +43,3 @@ def test_analyze_zig_file():
     assert "test.zig" in repo_graph.nodes  # Ensure the source file is added
     assert "std" in repo_graph.nodes  # Ensure the imported module is added
     assert ("test.zig", "std") in repo_graph.edges  # Edge should exist
-
