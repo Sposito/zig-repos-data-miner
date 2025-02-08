@@ -29,7 +29,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS nodes (
             id TEXT PRIMARY KEY,
             type TEXT,
-            timestamp TEXT,
+            timestamp INTEGER,
             author TEXT,
             message TEXT
         )
@@ -87,7 +87,7 @@ def load_graph_from_db():
 
 
 # --- Graph Construction Helpers ---
-def add_commit(commit_hash: str, timestamp: str, author: str, message: str, graph=None):
+def add_commit(commit_hash: str, timestamp: int, author: str, message: str, graph=None):
     if graph is None:
         graph = repo_graph  # Use the global graph if none is provided
     graph.add_node(commit_hash, node_type=NodeType.COMMIT.value, timestamp=timestamp, author=author, message=message)
@@ -144,7 +144,7 @@ def process_repository(repo_path: str, graph=None):
         commit_data = line.split("|")
         if len(commit_data) == 4:
             commit_hash, timestamp, author, message = commit_data
-            add_commit(commit_hash, timestamp, author, message, graph=graph)
+            add_commit(commit_hash, (int)timestamp, author, message, graph=graph)
 
 
 def analyze_zig_file(file_path: str, graph=repo_graph):
