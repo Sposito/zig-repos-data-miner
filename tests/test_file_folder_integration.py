@@ -11,6 +11,7 @@ from main import (
     NodeType
 )
 
+
 # Ensure a clean graph before each test.
 @pytest.fixture(autouse=True)
 def reset_repo_graph():
@@ -143,7 +144,8 @@ def test_integration_process_repository(tmp_path: Path, monkeypatch):
             # When git log is called, return fake_git_log.
             return type("FakeProcess", (), {"stdout": fake_git_log})
         elif "remote" in args:
-            # For the remote URL command, simulate failure so that the repository ID falls back to folder name.
+            # For the remote URL command, simulate failure so
+            #     that the repo ID falls back to folder name.
             raise subprocess.CalledProcessError(returncode=1, cmd=args)
         return type("FakeProcess", (), {"stdout": ""})
 

@@ -3,7 +3,6 @@ import os
 import sqlite3
 import pytest
 import networkx as nx
-from unittest.mock import patch, MagicMock
 from math import floor
 import time
 import tempfile
@@ -66,7 +65,7 @@ def test_save_and_load_graph(temp_db, monkeypatch):
 
     # Add sample nodes and edges
     repo_graph.add_node("commit1", type=NodeType.COMMIT.value, timestamp="123456", author="Alice",
-                          message="Initial commit")
+                        message="Initial commit")
     repo_graph.add_node("file1.zig", type=NodeType.FILE.value)
     repo_graph.add_edge("commit1", "file1.zig", relation="modifies")
 
@@ -168,4 +167,3 @@ def test_get_commits_for_repo(temp_db, monkeypatch):
         {"commit": "commit2"[:7], "timestamp": "1610003600", "author": "Bob", "message": "Second commit"},
     ]
     assert result == expected, f"Expected {expected}, but got {result}"
-

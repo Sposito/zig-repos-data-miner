@@ -1,8 +1,7 @@
 import pytest
 import networkx as nx
-import subprocess  # Add this at the top of tests/test_repository.py
 from unittest.mock import patch, MagicMock, mock_open
-from main import process_repository, analyze_zig_file, repo_graph
+from main import process_repository, analyze_zig_file
 
 
 @pytest.fixture(autouse=True)
@@ -18,7 +17,8 @@ def test_process_repository(mock_file, mock_subprocess):
     repo_graph.clear()  # Ensure fresh state before the test
 
     # Explicitly set stdout to a string
-    mock_subprocess.return_value = MagicMock(stdout="commit1|123456|Alice|Initial commit\ncommit2|123457|Bob|Updated")
+    std_out: str = "commit1|123456|Alice|Initial commit\ncommit2|123457|Bob|Updated"
+    mock_subprocess.return_value = MagicMock(stdout=std_out)
 
     test_graph = nx.DiGraph()  # Create a new test instance
 

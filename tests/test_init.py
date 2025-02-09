@@ -1,6 +1,5 @@
-# test_init.py
-import pytest
 from main import main_entry
+
 
 def test_main_entry_calls_all_functions(monkeypatch):
     """
@@ -38,7 +37,7 @@ def test_main_entry_calls_all_functions(monkeypatch):
     def fake_uvicorn_run(*args, **kwargs):
         call_order.append("uvicorn_run")
 
-    # Patch the functions in the main module so that their side effects are recorded instead of executed.
+    # Patch the fn in the main module so that their side effects are recorded instead of executed.
     monkeypatch.setattr("main.init_db", fake_init_db)
     monkeypatch.setattr("main.load_graph_from_db", fake_load_graph_from_db)
     monkeypatch.setattr("main.clean_all_repositories", fake_clean_all_repositories)

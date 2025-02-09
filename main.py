@@ -13,6 +13,7 @@ app = FastAPI()
 repo_graph = nx.DiGraph()
 repos_path = os.path.expanduser("~/Projects/ProjectsArchive/zig-trainer")
 db_path = "./dbs/repo_graphs.db"
+ignore_cleaning = True
 
 
 # --- Enum for Node Types ---
@@ -29,7 +30,7 @@ def init_db(path: str = None):
     Initializes the SQLite database by creating required tables if they do not exist.
     """
 
-    if (path == None):
+    if path is None:
         path = db_path
     conn = sqlite3.connect(path)
     c = conn.cursor()
@@ -50,6 +51,13 @@ def init_db(path: str = None):
             PRIMARY KEY (src, dest, relation)
         )
     """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS config (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            should_clean BOOLEAN DEFAULT FALSE
+        )
+    """)
+
     conn.commit()
     conn.close()
     print("Database initialized successfully.")
@@ -110,7 +118,11 @@ def load_graph_from_db():
     c.execute("SELECT * FROM nodes")
     for row in c.fetchall():
         node_id, node_type, timestamp, author, message = row
-        repo_graph.add_node(node_id, node_type=node_type, timestamp=timestamp, author=author, message=message)
+        repo_graph.add_node(node_id,
+                            node_type=node_type,
+                            timestamp=timestamp,
+                            author=author,
+                            message=message)
 
     c.execute("SELECT * FROM edges")
     for row in c.fetchall():
@@ -134,7 +146,8 @@ def add_commit(commit_hash: str, timestamp: str, author: str, message: str, grap
     """
     if graph is None:
         graph = repo_graph
-    graph.add_node(commit_hash, node_type=NodeType.COMMIT.value, timestamp=timestamp, author=author, message=message)
+    graph.add_node(commit_hash, node_type=NodeType.COMMIT.value,
+                   timestamp=timestamp, author=author, message=message)
 
 
 def add_file(file_path: str, commit_hash: str, prev_commit: str = None):
@@ -208,29 +221,11 @@ def add_repository(repo_id: str, graph=None):
 
 
 # --- Repository Processing ---
-def process_repositories():
+def get_repository_id(repo_path: str) -> str:
     """
-    Iterates over all repositories in the configured directory and processes them.
+    Extracts the repository ID from the remote URL if available,
+    otherwise falls back to the repository folder name.
     """
-
-    for repo_name in os.listdir(repos_path):
-        repo_dir = os.path.join(repos_path, repo_name)
-        if os.path.isdir(repo_dir) and os.path.exists(os.path.join(repo_dir, ".git")):
-            process_repository(repo_dir)
-
-
-def process_repository(repo_path: str, graph=None):
-    """
-    Processes a single repository by extracting commits, analyzing files, and constructing the graph.
-
-    Parameters:
-    - repo_path: Path to the repository.
-    - graph: Optional graph instance; defaults to the global repo_graph.
-    """
-
-    if graph is None:
-        graph = repo_graph
-
     try:
         remote_result = subprocess.run(
             ["git", "-C", repo_path, "remote", "get-url", "origin"],
@@ -255,39 +250,58 @@ def process_repository(repo_path: str, graph=None):
             repo_id = os.path.basename(os.path.normpath(repo_path))
     except Exception:
         repo_id = os.path.basename(os.path.normpath(repo_path))
+    return repo_id
 
+
+def process_commits(repo_path: str, repo_id: str, graph):
+    """
+    Processes the commit history from the repository and adds commit nodes
+    and repository->commit edges to the graph.
+    """
+    git_log_cmd = ["git", "-C", repo_path, "log", "--pretty=format:%H|%at|%an|%s", "--reverse"]
+    try:
+        result = subprocess.run(git_log_cmd, capture_output=True, text=True, check=True)
+        git_log_output = result.stdout.splitlines()
+    except subprocess.CalledProcessError:
+        git_log_output = []
+
+    for line in git_log_output:
+        commit_data = line.split("|")
+        if len(commit_data) == 4:
+            commit_hash, timestamp, author, message = commit_data
+            add_commit(commit_hash, timestamp, author, message, graph=graph)
+            graph.add_edge(repo_id, commit_hash, relation="has_commit")
+
+
+def process_repository(repo_path: str, graph=None):
+    """
+    Processes a single repository by extracting its remote information,
+    commits, and file structure into the graph.
+    """
+    if graph is None:
+        graph = repo_graph
+
+    repo_id = get_repository_id(repo_path)
     add_repository(repo_id, graph=graph)
 
-    git_log_cmd = ["git", "-C", repo_path, "log", "--pretty=format:%H|%at|%an|%s", "--reverse"]
-    try:
-        result = subprocess.run(git_log_cmd, capture_output=True, text=True, check=True)
-        git_log_output = result.stdout.splitlines()
-    except subprocess.CalledProcessError:
-        git_log_output = []
+    # Process commits before scanning files.
+    process_commits(repo_path, repo_id, graph)
 
-    for line in git_log_output:
-        commit_data = line.split("|")
-        if len(commit_data) == 4:
-            commit_hash, timestamp, author, message = commit_data
-            add_commit(commit_hash, timestamp, author, message, graph=graph)
-            graph.add_edge(repo_id, commit_hash, relation="has_commit")
-
-    # Integrate file scanning: process repository files after processing commits.
+    # Process repository files.
     process_repository_files(repo_path, graph)
 
-    git_log_cmd = ["git", "-C", repo_path, "log", "--pretty=format:%H|%at|%an|%s", "--reverse"]
-    try:
-        result = subprocess.run(git_log_cmd, capture_output=True, text=True, check=True)
-        git_log_output = result.stdout.splitlines()
-    except subprocess.CalledProcessError:
-        git_log_output = []
+    # Process commits again.
+    process_commits(repo_path, repo_id, graph)
 
-    for line in git_log_output:
-        commit_data = line.split("|")
-        if len(commit_data) == 4:
-            commit_hash, timestamp, author, message = commit_data
-            add_commit(commit_hash, timestamp, author, message, graph=graph)
-            graph.add_edge(repo_id, commit_hash, relation="has_commit")
+
+def process_repositories():
+    """
+    Iterates over all repositories in the configured directory and processes them.
+    """
+    for repo_name in os.listdir(repos_path):
+        repo_dir: str = os.path.join(repos_path, repo_name)
+        if os.path.isdir(repo_dir) and os.path.exists(os.path.join(repo_dir, ".git")):
+            process_repository(repo_dir)
 
 
 def analyze_zig_file(file_path: str, graph=repo_graph):
@@ -365,14 +379,17 @@ def clean_repository(repo_path: str):
     """
 
     try:
-        subprocess.run(["git", "-C", repo_path, "reset", "--hard"], capture_output=True, text=True, check=True)
-        subprocess.run(["git", "-C", repo_path, "clean", "-fdx"], capture_output=True, text=True, check=True)
-        print(f"Cleaned repository: {repo_path}")
+        subprocess.run(["git", "-C", repo_path, "reset", "--hard"],
+                       capture_output=True, text=True, check=True)
+
+        subprocess.run(["git", "-C", repo_path, "clean", "-fdx"],
+                       capture_output=True, text=True, check=True)
+        logging.info(f"Cleaned repository: {repo_path}")
     except subprocess.CalledProcessError as e:
         logging.error(f"Error cleaning repository {repo_path}: {e}")
 
 
-def clean_all_repositories(path: str, signature: str = ".git"):
+def clean_all_repositories(path: str, signature: str = ".git", ignore: bool = False):
     """
     Cleans all repositories in the specified directory by resetting and removing untracked files.
 
@@ -380,6 +397,8 @@ def clean_all_repositories(path: str, signature: str = ".git"):
     - path: Root directory containing repositories.
     - signature: File or folder indicating a valid repository (default is ".git").
     """
+    if ignore:
+        return
 
     for repo_name in os.listdir(path):
         repo_dir = os.path.join(path, repo_name)
@@ -399,7 +418,7 @@ def get_commits_for_repo(repo_id: str, path: str = None):
     Returns:
     - A list of commits containing commit hash, timestamp, author, and message.
     """
-    if path == None:
+    if path is None:
         path = db_path
 
     conn = sqlite3.connect(path)
@@ -431,7 +450,7 @@ def main_entry():
     init_db()
     load_graph_from_db()
 
-    clean_all_repositories(repos_path)
+    clean_all_repositories(path=repos_path, ignore=ignore_cleaning)
 
     process_repositories()
 

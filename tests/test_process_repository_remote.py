@@ -1,7 +1,6 @@
 import os
 import subprocess
 import pytest
-import networkx as nx
 from unittest.mock import patch, MagicMock
 from main import process_repository, repo_graph, NodeType
 

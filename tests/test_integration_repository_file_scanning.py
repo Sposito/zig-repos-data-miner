@@ -1,10 +1,8 @@
 import os
-import subprocess
-import networkx as nx
-from unittest.mock import patch, MagicMock, call, mock_open
+from unittest.mock import patch, MagicMock, mock_open
 import pytest
 
-from main import process_repository, process_repository_files, repo_graph, NodeType
+from main import process_repository, repo_graph
 
 
 @pytest.fixture(autouse=True)

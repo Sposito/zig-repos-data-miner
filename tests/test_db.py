@@ -1,4 +1,3 @@
-import pytest
 from main import add_commit, add_file, add_folder, add_reference, repo_graph
 
 
