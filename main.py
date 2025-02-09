@@ -12,7 +12,7 @@ from typing import List, Dict, Callable
 app = FastAPI()
 repo_graph = nx.DiGraph()
 repos_path = os.path.expanduser("~/Projects/ProjectsArchive/zig-trainer")
-db_path = "./repo_graphs.db"
+db_path = "./dbs/repo_graphs.db"
 
 
 # --- Enum for Node Types ---
@@ -24,12 +24,14 @@ class NodeType(enum.Enum):
 
 
 # --- SQLite Setup ---
-def init_db():
+def init_db(path: str = None):
     """
     Initializes the SQLite database by creating required tables if they do not exist.
     """
 
-    conn = sqlite3.connect(db_path)
+    if (path == None):
+        path = db_path
+    conn = sqlite3.connect(path)
     c = conn.cursor()
     c.execute("""
         CREATE TABLE IF NOT EXISTS nodes (
@@ -387,7 +389,7 @@ def clean_all_repositories(path: str, signature: str = ".git"):
 
 # --- API Endpoint ---
 @app.get("/repos/{repo_id}/commits")
-def get_commits_for_repo(repo_id: str):
+def get_commits_for_repo(repo_id: str, path: str = None):
     """
     Retrieves commit history for a specific repository from the database.
 
@@ -397,8 +399,10 @@ def get_commits_for_repo(repo_id: str):
     Returns:
     - A list of commits containing commit hash, timestamp, author, and message.
     """
+    if path == None:
+        path = db_path
 
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(path)
     c = conn.cursor()
     query = """
     SELECT n.id, n.timestamp, n.author, n.message
@@ -421,18 +425,20 @@ def get_commits_for_repo(repo_id: str):
 
 
 # --- Main Execution ---
-if __name__ == "__main__":
+
+
+def main_entry():
     init_db()
     load_graph_from_db()
 
-    # Clean all repositories so they return to a clean state.
     clean_all_repositories(repos_path)
 
-    # Process repositories for commit history.
     process_repositories()
 
-    # Process each repository's files and folders.
     walk_repos(repos_path, repo_graph, ".git", process_repository_files)
-
     save_graph_to_db()
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
+
+if __name__ == "__main__":
+    main_entry()
